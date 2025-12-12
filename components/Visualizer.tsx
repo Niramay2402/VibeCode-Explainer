@@ -1,14 +1,16 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { Maximize2, Terminal, AlertTriangle, X, Code as CodeIcon, Copy, Check } from 'lucide-react';
+import { Maximize2, Terminal, AlertTriangle, X, Code as CodeIcon, Copy, Check, RefreshCw } from 'lucide-react';
 import mermaid from 'mermaid';
 
 interface VisualizerProps {
   mermaidCode: string;
   asciiArt: string;
   description: string;
+  onRegenerate: () => void;
+  isRegenerating: boolean;
 }
 
-export const Visualizer: React.FC<VisualizerProps> = ({ mermaidCode, asciiArt, description }) => {
+export const Visualizer: React.FC<VisualizerProps> = ({ mermaidCode, asciiArt, description, onRegenerate, isRegenerating }) => {
   const [mode, setMode] = useState<'graph' | 'ascii'>('graph');
   const [imgError, setImgError] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
@@ -138,19 +140,31 @@ export const Visualizer: React.FC<VisualizerProps> = ({ mermaidCode, asciiArt, d
         <h3 className="text-xl font-bold text-white flex items-center">
           <span className="mr-2 text-2xl">🍌</span> Nano Banana Visuals
         </h3>
-        <div className="flex bg-zinc-900 rounded-lg p-1 border border-zinc-800">
-            <button
-                onClick={() => setMode('graph')}
-                className={`px-3 py-1.5 rounded-md text-sm transition-colors ${mode === 'graph' ? 'bg-zinc-800 text-white' : 'text-zinc-500 hover:text-zinc-300'}`}
+        
+        <div className="flex items-center gap-2">
+            <button 
+                onClick={onRegenerate}
+                disabled={isRegenerating}
+                className="flex items-center gap-2 px-3 py-1.5 bg-blue-900/30 hover:bg-blue-900/50 text-blue-300 rounded-lg border border-blue-800 transition-colors text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                title="Regenerate Diagram"
             >
-                Flowchart
+                <RefreshCw size={14} className={isRegenerating ? "animate-spin" : ""} />
+                {isRegenerating ? "Generating..." : "Regenerate"}
             </button>
-            <button
-                onClick={() => setMode('ascii')}
-                className={`px-3 py-1.5 rounded-md text-sm transition-colors ${mode === 'ascii' ? 'bg-zinc-800 text-white' : 'text-zinc-500 hover:text-zinc-300'}`}
-            >
-                Nano Banana (ASCII)
-            </button>
+            <div className="flex bg-zinc-900 rounded-lg p-1 border border-zinc-800">
+                <button
+                    onClick={() => setMode('graph')}
+                    className={`px-3 py-1.5 rounded-md text-sm transition-colors ${mode === 'graph' ? 'bg-zinc-800 text-white' : 'text-zinc-500 hover:text-zinc-300'}`}
+                >
+                    Flowchart
+                </button>
+                <button
+                    onClick={() => setMode('ascii')}
+                    className={`px-3 py-1.5 rounded-md text-sm transition-colors ${mode === 'ascii' ? 'bg-zinc-800 text-white' : 'text-zinc-500 hover:text-zinc-300'}`}
+                >
+                    ASCII
+                </button>
+            </div>
         </div>
       </div>
 
@@ -192,16 +206,18 @@ export const Visualizer: React.FC<VisualizerProps> = ({ mermaidCode, asciiArt, d
                      <p className="text-zinc-400 mb-4">Could not render flowchart.</p>
                      <div className="flex flex-col gap-2">
                         <button 
+                          onClick={onRegenerate}
+                          disabled={isRegenerating}
+                          className="flex items-center justify-center gap-2 text-sm bg-blue-600 hover:bg-blue-500 text-white py-2 px-4 rounded-lg transition-colors disabled:opacity-50"
+                        >
+                            <RefreshCw size={14} className={isRegenerating ? "animate-spin" : ""} />
+                            Try Regenerating
+                        </button>
+                        <button 
                         onClick={() => setMode('ascii')}
                         className="text-sm bg-zinc-800 hover:bg-zinc-700 text-white py-2 px-4 rounded-lg transition-colors"
                         >
                         Switch to Nano Banana View
-                        </button>
-                        <button 
-                            onClick={() => setShowCode(true)}
-                            className="text-sm text-zinc-500 hover:text-zinc-300 underline"
-                        >
-                            Inspect Source
                         </button>
                      </div>
                   </div>

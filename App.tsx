@@ -1,11 +1,14 @@
+
 import React, { useState, useRef, useEffect } from 'react';
-import { Code, Sparkles, Play, Pause, ChevronRight, Zap, Info, ArrowRight } from 'lucide-react';
-import { analyzeCode, generateSpeech } from './services/geminiService';
+import { Code, Sparkles, Play, Pause, ChevronRight, Zap, Info, ArrowRight, FolderUp, FileText, Trash2, Layout } from 'lucide-react';
+import { analyzeCode, generateSpeech, generateQuiz, regenerateVisuals } from './services/geminiService';
 import { ExplanationResult, LoadingState } from './types';
 import { LayerTabs } from './components/LayerTabs';
 import { ComplexityMeter } from './components/ComplexityMeter';
 import { Visualizer } from './components/Visualizer';
 import { QuizView } from './components/QuizView';
+import { FileExplorer } from './components/FileExplorer';
+import { StructuralView } from './components/StructuralView';
 
 const SAMPLE_CODE = `
 def bubble_sort(arr):
@@ -17,28 +20,82 @@ def bubble_sort(arr):
     return arr
 `;
 
+interface ProjectFile {
+  path: string;
+  content: string;
+}
+
 function App() {
-  const [code, setCode] = useState(SAMPLE_CODE);
+  const [editorContent, setEditorContent] = useState(SAMPLE_CODE); // What user sees in text area
+  const [projectFiles, setProjectFiles] = useState<ProjectFile[]>([]); // All loaded files
+  const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null); // Currently selected file path
+  
   const [result, setResult] = useState<ExplanationResult | null>(null);
   const [loadingState, setLoadingState] = useState<LoadingState>('idle');
   const [activeTab, setActiveTab] = useState<'layman' | 'structural' | 'visual' | 'quiz'>('layman');
   const [isPlayingAudio, setIsPlayingAudio] = useState(false);
+  const [isProjectMode, setIsProjectMode] = useState(false);
+  const [isRegeneratingQuiz, setIsRegeneratingQuiz] = useState(false);
+  const [isRegeneratingVisuals, setIsRegeneratingVisuals] = useState(false);
+  
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const getFullContext = () => {
+    let contextToAnalyze = editorContent;
+    if (isProjectMode && projectFiles.length > 0) {
+        contextToAnalyze = projectFiles.map(f => `\n\n--- FILE: ${f.path} ---\n${f.content}`).join('');
+    }
+    return contextToAnalyze;
+  };
 
   const handleAnalyze = async () => {
-    if (!code.trim()) return;
+    const contextToAnalyze = getFullContext();
+    if (!contextToAnalyze.trim()) return;
     
     setLoadingState('analyzing');
     setResult(null); // Clear previous result
     setActiveTab('layman');
     
     try {
-      const data = await analyzeCode(code);
+      const data = await analyzeCode(contextToAnalyze);
       setResult(data);
       setLoadingState('complete');
     } catch (error) {
       console.error(error);
       setLoadingState('error');
+    }
+  };
+
+  const handleRegenerateQuiz = async (count: number) => {
+    if (!result) return;
+    
+    const contextToAnalyze = getFullContext();
+    setIsRegeneratingQuiz(true);
+    
+    try {
+        const newQuestions = await generateQuiz(contextToAnalyze, count);
+        setResult(prev => prev ? { ...prev, quiz: newQuestions } : null);
+    } catch (e) {
+        console.error("Failed to regenerate quiz", e);
+    } finally {
+        setIsRegeneratingQuiz(false);
+    }
+  };
+
+  const handleRegenerateVisuals = async () => {
+    if (!result) return;
+    
+    const contextToAnalyze = getFullContext();
+    setIsRegeneratingVisuals(true);
+    
+    try {
+        const newVisuals = await regenerateVisuals(contextToAnalyze);
+        setResult(prev => prev ? { ...prev, visual: newVisuals } : null);
+    } catch (e) {
+        console.error("Failed to regenerate visuals", e);
+    } finally {
+        setIsRegeneratingVisuals(false);
     }
   };
 
@@ -53,7 +110,7 @@ function App() {
 
     try {
       // Build a readable script
-      const script = `Here is the vibe check for your ${result.domain} code. 
+      const script = `Here is the vibe check for your ${result.domain} ${isProjectMode ? 'project' : 'code'}. 
       Analogy: ${result.layman.analogy}. 
       Basically: ${result.layman.description}. 
       Key Takeaway: ${result.layman.keyTakeaway}`;
@@ -78,10 +135,87 @@ function App() {
     }
   };
 
+  // Folder Upload Logic
+  const handleFolderClick = () => {
+    if (fileInputRef.current) {
+      fileInputRef.current.click();
+    }
+  };
+
+  const shouldIgnoreFile = (path: string) => {
+    const ignorePatterns = [
+      'node_modules', '.git', 'dist', 'build', 'coverage', '.next', 
+      'package-lock.json', 'yarn.lock', '.DS_Store', '.env', 
+      '.png', '.jpg', '.jpeg', '.svg', '.ico', '.mp4', '.woff', '.woff2'
+    ];
+    return ignorePatterns.some(pattern => path.includes(pattern));
+  };
+
+  const handleFolderUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    setLoadingState('generating_visuals'); // UI indicator
+    
+    const newProjectFiles: ProjectFile[] = [];
+
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      const path = file.webkitRelativePath || file.name;
+
+      if (shouldIgnoreFile(path)) continue;
+
+      try {
+        const text = await file.text();
+        // Skip binary files
+        if (text.includes('\0')) continue;
+        newProjectFiles.push({ path, content: text });
+      } catch (err) {
+        console.warn(`Could not read file ${path}`, err);
+      }
+    }
+
+    if (newProjectFiles.length > 0) {
+        setProjectFiles(newProjectFiles);
+        setIsProjectMode(true);
+        // Select first file by default
+        setSelectedFilePath(newProjectFiles[0].path);
+        setEditorContent(newProjectFiles[0].content);
+    }
+    
+    setLoadingState('idle');
+    e.target.value = '';
+  };
+
+  const clearProject = () => {
+    setEditorContent(SAMPLE_CODE);
+    setProjectFiles([]);
+    setIsProjectMode(false);
+    setSelectedFilePath(null);
+    setResult(null);
+  };
+
+  const handleFileSelect = (content: string, path: string) => {
+    setEditorContent(content);
+    setSelectedFilePath(path);
+  };
+
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col lg:flex-row overflow-hidden">
       {/* Hidden Audio Element */}
       <audio ref={audioRef} className="hidden" />
+      
+      {/* Hidden File Input for Folder Select */}
+      <input 
+        type="file" 
+        ref={fileInputRef} 
+        onChange={handleFolderUpload}
+        className="hidden" 
+        // @ts-ignore
+        webkitdirectory="" 
+        directory="" 
+        multiple 
+      />
 
       {/* LEFT PANEL: Input */}
       <div className="w-full lg:w-1/2 p-6 flex flex-col h-screen overflow-y-auto border-r border-zinc-800">
@@ -100,26 +234,68 @@ function App() {
           </div>
         </header>
 
-        <div className="flex-1 flex flex-col relative group">
-          <div className="absolute top-0 right-0 p-2 z-10 opacity-0 group-hover:opacity-100 transition-opacity">
-            <span className="text-xs text-zinc-600 bg-zinc-900 px-2 py-1 rounded border border-zinc-800">Paste Code Here</span>
+        <div className="flex-1 flex flex-col gap-4">
+          <div className="flex justify-between items-center">
+            <span className="text-xs text-zinc-500 font-bold uppercase tracking-wider flex items-center gap-2">
+                {isProjectMode ? <Layout size={14}/> : <FileText size={14} />}
+                {isProjectMode ? 'Project Workspace' : 'Code Input'}
+            </span>
+            <div className="flex gap-2">
+                {isProjectMode && (
+                   <button 
+                    onClick={clearProject}
+                    className="text-xs flex items-center gap-1 text-red-400 hover:text-red-300 bg-red-900/20 px-2 py-1 rounded border border-red-900/50 transition-colors"
+                   >
+                     <Trash2 size={12} /> Exit Project
+                   </button>
+                )}
+                <button 
+                  onClick={handleFolderClick}
+                  className="text-xs flex items-center gap-1 text-zinc-400 hover:text-white bg-zinc-800 hover:bg-zinc-700 px-3 py-1 rounded border border-zinc-700 transition-colors"
+                  title="Upload a folder of code"
+                >
+                  <FolderUp size={12} /> Upload Folder
+                </button>
+            </div>
           </div>
-          <textarea
-            value={code}
-            onChange={(e) => setCode(e.target.value)}
-            className="flex-1 w-full bg-[#0d0d10] text-sm font-mono text-zinc-300 p-6 rounded-2xl resize-none focus:outline-none focus:ring-2 focus:ring-purple-500/30 border border-zinc-800 transition-all placeholder:text-zinc-700"
-            placeholder="// Paste your complex code here..."
-            spellCheck={false}
-          />
+
+          <div className="flex-1 flex gap-4 min-h-0">
+             {/* Project Explorer (Only in Project Mode) */}
+             {isProjectMode && (
+                <div className="w-1/3 min-w-[200px] h-full">
+                    <FileExplorer 
+                        files={projectFiles} 
+                        onFileSelect={handleFileSelect}
+                        selectedPath={selectedFilePath}
+                    />
+                </div>
+             )}
+
+             {/* Code Editor */}
+             <div className="flex-1 flex flex-col relative h-full">
+                {isProjectMode && selectedFilePath && (
+                    <div className="absolute top-0 right-0 bg-zinc-900/80 text-zinc-500 text-[10px] px-2 py-1 rounded-bl-lg rounded-tr-lg border-l border-b border-zinc-800 z-10 backdrop-blur font-mono">
+                        {selectedFilePath}
+                    </div>
+                )}
+                <textarea
+                    value={editorContent}
+                    onChange={(e) => setEditorContent(e.target.value)}
+                    className="w-full h-full bg-[#0d0d10] text-sm font-mono text-zinc-300 p-4 rounded-xl resize-none focus:outline-none focus:ring-1 focus:ring-purple-500/30 border border-zinc-800 transition-all placeholder:text-zinc-700 custom-scrollbar"
+                    placeholder="// Paste your code here..."
+                    spellCheck={false}
+                />
+             </div>
+          </div>
         </div>
 
         <div className="mt-6 flex items-center justify-between">
             <div className="text-xs text-zinc-500 hidden sm:block">
-                Supported: Python, JS, C++, Rust, Go...
+               {isProjectMode ? `Context: ${projectFiles.length} files loaded` : 'Supported: Python, JS, C++, Rust...'}
             </div>
             <button
                 onClick={handleAnalyze}
-                disabled={loadingState === 'analyzing' || !code.trim()}
+                disabled={loadingState === 'analyzing' || (!editorContent.trim() && projectFiles.length === 0)}
                 className={`
                 group relative px-8 py-4 bg-white text-black font-bold rounded-xl 
                 flex items-center space-x-2 transition-all hover:scale-[1.02] active:scale-[0.98]
@@ -130,12 +306,12 @@ function App() {
                 {loadingState === 'analyzing' ? (
                 <>
                     <div className="w-5 h-5 border-2 border-zinc-900 border-t-transparent rounded-full animate-spin" />
-                    <span>Analyzing Vibes...</span>
+                    <span>Analyzing...</span>
                 </>
                 ) : (
                 <>
                     <Sparkles size={18} className="text-purple-600 group-hover:rotate-12 transition-transform" />
-                    <span>Explain It</span>
+                    <span>Explain {isProjectMode ? 'Project' : 'It'}</span>
                     <ArrowRight size={18} className="opacity-50 group-hover:translate-x-1 transition-transform" />
                 </>
                 )}
@@ -144,7 +320,7 @@ function App() {
       </div>
 
       {/* RIGHT PANEL: Output */}
-      <div className="w-full lg:w-1/2 bg-zinc-950/50 p-6 h-screen overflow-y-auto relative">
+      <div className="w-full lg:w-1/2 bg-zinc-950/50 p-6 h-screen overflow-y-auto relative custom-scrollbar">
         <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_right,_var(--tw-gradient-stops))] from-purple-900/10 via-transparent to-transparent pointer-events-none" />
         
         {!result && loadingState === 'idle' && (
@@ -227,54 +403,7 @@ function App() {
               )}
 
               {activeTab === 'structural' && (
-                <div className="space-y-6">
-                  <div className="glass-panel p-6 rounded-2xl">
-                    <h3 className="text-lg font-bold text-blue-400 mb-4">Core Components</h3>
-                    <div className="space-y-3">
-                        {result.structural.components.map((comp, i) => (
-                            <div key={i} className="flex items-start bg-zinc-900/50 p-3 rounded-lg border border-zinc-800/50">
-                                <div className="bg-blue-500/20 text-blue-400 p-1.5 rounded mr-3 mt-0.5">
-                                    <Code size={14} />
-                                </div>
-                                <div>
-                                    <span className="block text-white font-mono text-sm font-bold">{comp.name}</span>
-                                    <span className="text-zinc-500 text-sm">{comp.role}</span>
-                                </div>
-                            </div>
-                        ))}
-                    </div>
-                  </div>
-
-                  <div className="flex flex-col space-y-4">
-                     <h3 className="text-lg font-bold text-zinc-300 ml-1">Execution Flow</h3>
-                     {result.structural.flowSteps.map((step, i) => (
-                         <div key={i} className="flex items-center group">
-                            <div className="w-8 h-8 rounded-full bg-zinc-800 border border-zinc-700 flex items-center justify-center text-sm font-bold text-zinc-500 group-hover:border-blue-500 group-hover:text-blue-500 transition-colors">
-                                {i + 1}
-                            </div>
-                            <div className="mx-4 h-[1px] flex-1 bg-zinc-800 group-hover:bg-blue-500/30 transition-colors"></div>
-                            <div className="w-4/5 bg-zinc-900 p-3 rounded-lg border border-zinc-800 text-sm text-zinc-300 group-hover:text-white transition-colors">
-                                {step}
-                            </div>
-                         </div>
-                     ))}
-                  </div>
-                  
-                  <div className="bg-zinc-900 p-4 rounded-xl border-l-4 border-yellow-500">
-                    <h4 className="text-xs font-bold text-zinc-500 uppercase mb-2">Dependencies & Libraries</h4>
-                    <div className="flex flex-wrap gap-2">
-                        {result.structural.dependencies.length > 0 ? (
-                            result.structural.dependencies.map((dep, i) => (
-                                <span key={i} className="px-2 py-1 bg-black rounded border border-zinc-800 text-xs text-yellow-500 font-mono">
-                                    {dep}
-                                </span>
-                            ))
-                        ) : (
-                            <span className="text-zinc-600 text-sm italic">Standard Library Only</span>
-                        )}
-                    </div>
-                  </div>
-                </div>
+                <StructuralView data={result.structural} domain={result.domain} />
               )}
 
               {activeTab === 'visual' && (
@@ -282,11 +411,17 @@ function App() {
                     mermaidCode={result.visual.mermaidCode}
                     asciiArt={result.visual.nanoBananaAscii}
                     description={result.visual.explanation}
+                    onRegenerate={handleRegenerateVisuals}
+                    isRegenerating={isRegeneratingVisuals}
                 />
               )}
 
               {activeTab === 'quiz' && (
-                <QuizView questions={result.quiz} />
+                <QuizView 
+                    questions={result.quiz} 
+                    onRegenerate={handleRegenerateQuiz}
+                    isRegenerating={isRegeneratingQuiz}
+                />
               )}
             </div>
           </div>

@@ -1,5 +1,6 @@
+
 import { GoogleGenAI, Type, Schema } from "@google/genai";
-import { ExplanationResult, CodeDomain } from "../types";
+import { ExplanationResult, CodeDomain, QuizQuestion } from "../types";
 
 // Using the provided environment variable
 const apiKey = process.env.API_KEY || '';
@@ -8,7 +9,9 @@ const ai = new GoogleGenAI({ apiKey });
 const responseSchema: Schema = {
   type: Type.OBJECT,
   properties: {
-    domain: { type: Type.STRING, enum: [CodeDomain.AIML, CodeDomain.DSA, CodeDomain.WEB, CodeDomain.GENERAL] },
+    domain: { type: Type.STRING, enum: [
+      CodeDomain.AIML, CodeDomain.DSA, CodeDomain.WEB, CodeDomain.MOBILE, CodeDomain.PYTHON, CodeDomain.JAVASCRIPT, CodeDomain.GENERAL
+    ]},
     complexityScore: { type: Type.INTEGER },
     layman: {
       type: Type.OBJECT,
@@ -22,6 +25,8 @@ const responseSchema: Schema = {
     structural: {
       type: Type.OBJECT,
       properties: {
+        framework: { type: Type.STRING },
+        architecture: { type: Type.STRING },
         components: {
           type: Type.ARRAY,
           items: {
@@ -33,15 +38,82 @@ const responseSchema: Schema = {
           }
         },
         flowSteps: { type: Type.ARRAY, items: { type: Type.STRING } },
-        dependencies: { type: Type.ARRAY, items: { type: Type.STRING } }
+        dependencies: { type: Type.ARRAY, items: { type: Type.STRING } },
+        
+        // Specific Contexts
+        dsaTrace: {
+          type: Type.ARRAY,
+          description: "ONLY IF DSA: Dry-run simulation.",
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              step: { type: Type.INTEGER },
+              description: { type: Type.STRING },
+              variables: { type: Type.STRING }
+            }
+          }
+        },
+        reactAnalysis: {
+          type: Type.ARRAY,
+          description: "ONLY IF WEB/REACT.",
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              name: { type: Type.STRING },
+              type: { type: Type.STRING, enum: ['container', 'presentational', 'hook'] },
+              hooks: { type: Type.ARRAY, items: { type: Type.STRING } },
+              stateVariables: { type: Type.ARRAY, items: { type: Type.STRING } },
+              props: { type: Type.ARRAY, items: { type: Type.STRING } }
+            }
+          }
+        },
+        mobileAnalysis: {
+          type: Type.ARRAY,
+          description: "ONLY IF MOBILE/EXPO.",
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              name: { type: Type.STRING },
+              route: { type: Type.STRING },
+              purpose: { type: Type.STRING },
+              nativeFeatures: { type: Type.ARRAY, items: { type: Type.STRING } }
+            }
+          }
+        },
+        pythonAnalysis: {
+          type: Type.ARRAY,
+          description: "ONLY IF PYTHON SCRIPT.",
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              name: { type: Type.STRING },
+              type: { type: Type.STRING, enum: ['class', 'function', 'variable', 'decorator'] },
+              details: { type: Type.STRING, description: "Args, inheritance, or values" },
+              docstring: { type: Type.STRING, description: "Brief purpose summary" }
+            }
+          }
+        },
+        jsAnalysis: {
+          type: Type.ARRAY,
+          description: "ONLY IF JS/TS SCRIPT (Node/Utility).",
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              name: { type: Type.STRING },
+              type: { type: Type.STRING, enum: ['function', 'class', 'variable', 'export'] },
+              isAsync: { type: Type.BOOLEAN },
+              description: { type: Type.STRING }
+            }
+          }
+        }
       },
       required: ['components', 'flowSteps', 'dependencies']
     },
     visual: {
       type: Type.OBJECT,
       properties: {
-        mermaidCode: { type: Type.STRING, description: "Raw valid Mermaid.js graph definition. Start immediately with 'graph TD', etc. CRITICAL: Separate EVERY statement with a newline character (\\n). Use semicolons (;) at the end of statements. Wrap ALL node labels in double quotes." },
-        nanoBananaAscii: { type: Type.STRING, description: "Creative ASCII art diagram (Nano Banana style)" },
+        mermaidCode: { type: Type.STRING },
+        nanoBananaAscii: { type: Type.STRING },
         explanation: { type: Type.STRING }
       },
       required: ['mermaidCode', 'nanoBananaAscii', 'explanation']
@@ -68,26 +140,30 @@ export const analyzeCode = async (code: string): Promise<ExplanationResult> => {
   if (!apiKey) throw new Error("API Key is missing");
 
   const prompt = `
-    You are VibeCode Explainer, a world-class technical educator.
-    Analyze the following code and provide a 3-layer explanation.
-    
+    You are VibeCode Explainer. Analyze the provided code.
+
+    1. **Identify the Sector (PICK ONE)**:
+       - **DSA**: Algorithms, data structures, LeetCode style logic.
+       - **Web/React**: React components, hooks, JSX, DOM interaction.
+       - **Mobile/Expo**: React Native, Expo APIs, screens, navigation.
+       - **Python**: Python scripts, classes, data processing, backend logic.
+       - **JavaScript**: JS/TS scripts, Node.js, utilities, async logic (non-UI).
+       - **General**: Generic C++, Rust, Go, or mixed files not fitting above.
+
+    2. **Populate the Structural Layer**:
+       - **IF DSA**: Fill \`dsaTrace\`. Simulate execution with a sample input. Show key variable changes.
+       - **IF WEB/REACT**: Fill \`reactAnalysis\`. Break down components, props, and hooks.
+       - **IF MOBILE**: Fill \`mobileAnalysis\`. Break down screens and native features.
+       - **IF PYTHON**: Fill \`pythonAnalysis\`. List classes, key functions, decorators.
+       - **IF JAVASCRIPT**: Fill \`jsAnalysis\`. List exports, async functions, key logic blocks.
+       - **IF GENERAL**: Focus on \`components\` and \`flowSteps\`.
+
+    3. **Visuals**:
+       - Create a Mermaid Graph (graph TD) showing the flow/architecture.
+       - Use \\n for newlines in labels. Wrap text in double quotes.
+
     Code to Analyze:
     ${code}
-
-    Instructions:
-    1. Identify the Domain (AI/ML, DSA, Web Dev, General).
-    2. Layer 1 (Layman): Use a creative real-world analogy (No jargon).
-    3. Layer 2 (Structural): Breakdown logical flow, complexity, and dependencies.
-    4. Layer 3 (Visual): 
-       - Generate a valid Mermaid.js graph definition (usually 'graph TD').
-       - CRITICAL RULE 1: Use actual newline characters (\\n) in the JSON string to separate statements. The code MUST NOT be a single line.
-       - CRITICAL RULE 2: Wrap ALL node text in double quotes. Example: id["Label Text"].
-       - CRITICAL RULE 3: Do NOT use markdown backticks in the JSON string.
-       - Generate a "Nano Banana" ASCII art representation for terminal vibes.
-    5. Create 2-3 quiz questions to test understanding.
-    6. Rate complexity 1-10.
-
-    Be vibrant, clear, and educational.
   `;
 
   try {
@@ -106,6 +182,97 @@ export const analyzeCode = async (code: string): Promise<ExplanationResult> => {
     return JSON.parse(text) as ExplanationResult;
   } catch (error) {
     console.error("Analysis failed:", error);
+    throw error;
+  }
+};
+
+export const generateQuiz = async (code: string, count: number): Promise<QuizQuestion[]> => {
+  if (!apiKey) throw new Error("API Key is missing");
+
+  const prompt = `
+    You are VibeCode Explainer.
+    Generate exactly ${count} multiple-choice quiz questions based on the following code.
+    
+    Code Context:
+    ${code}
+  `;
+
+  const quizSchema: Schema = {
+    type: Type.ARRAY,
+    items: {
+      type: Type.OBJECT,
+      properties: {
+        question: { type: Type.STRING },
+        options: { type: Type.ARRAY, items: { type: Type.STRING } },
+        correctIndex: { type: Type.INTEGER },
+        explanation: { type: Type.STRING }
+      },
+      required: ['question', 'options', 'correctIndex', 'explanation']
+    }
+  };
+
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents: prompt,
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: quizSchema,
+      }
+    });
+
+    const text = response.text;
+    if (!text) throw new Error("No response from Gemini");
+    
+    return JSON.parse(text) as QuizQuestion[];
+  } catch (error) {
+    console.error("Quiz generation failed:", error);
+    throw error;
+  }
+};
+
+export const regenerateVisuals = async (code: string): Promise<ExplanationResult['visual']> => {
+  if (!apiKey) throw new Error("API Key is missing");
+
+  const prompt = `
+    You are VibeCode Explainer.
+    Regenerate the Visual Analysis for the following code.
+    
+    Code Context:
+    ${code}
+
+    Requirements:
+    1. Mermaid Graph: Valid 'graph TD'. Use \\n for newlines, "quotes" for labels.
+    2. Nano Banana ASCII: Creative ASCII art.
+    3. Explanation: Brief description.
+  `;
+
+  const visualSchema: Schema = {
+    type: Type.OBJECT,
+    properties: {
+      mermaidCode: { type: Type.STRING },
+      nanoBananaAscii: { type: Type.STRING },
+      explanation: { type: Type.STRING }
+    },
+    required: ['mermaidCode', 'nanoBananaAscii', 'explanation']
+  };
+
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents: prompt,
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: visualSchema,
+      }
+    });
+
+    const text = response.text;
+    if (!text) throw new Error("No response from Gemini");
+    
+    return JSON.parse(text) as ExplanationResult['visual'];
+  } catch (error) {
+    console.error("Visual regeneration failed:", error);
     throw error;
   }
 };
